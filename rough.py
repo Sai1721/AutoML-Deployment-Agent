@@ -28,25 +28,18 @@ def set_background(full_bg_path, sidebar_bg_path):
     st.markdown(
         f"""
         <style>
-        /* Full App Background */
         .stApp {{
             background-image: url("data:image/{full_bg_ext};base64,{full_bg}");
             background-size: cover;
             background-repeat: no-repeat;
             background-attachment: fixed;
         }}
-
-        /* Sidebar Background */
         [data-testid="stSidebar"] > div:first-child {{
             background-image: url("data:image/{sidebar_ext};base64,{sidebar_bg}");
             background-size: cover;
             background-repeat: no-repeat;
         }}
-
-        /* Custom Footer */
-        footer {{
-            visibility: hidden;
-        }}
+        footer {{ visibility: hidden; }}
         .footer-container {{
             position: fixed;
             left: 0;
@@ -59,8 +52,6 @@ def set_background(full_bg_path, sidebar_bg_path):
             font-size: 14px;
             z-index: 100;
         }}
-
-        /* Theme Enhancements */
         .stButton>button {{
             background-color: #2980b9;
             color: white;
@@ -68,19 +59,16 @@ def set_background(full_bg_path, sidebar_bg_path):
             border-radius: 8px;
             padding: 0.5em 1em;
         }}
-
         .stSelectbox, .stTextInput>div>div>input, .stTextArea>div>textarea {{
             background-color: #f5f5f5 !important;
             color: #333;
         }}
-
         .stMarkdown h1, h2, h3, h4, h5 {{
             color: #1e272e;
         }}
         </style>
-
         <div class="footer-container">
-            ℹ️ Need Help?  Contact: sairamanmathivelan@gmail.com
+            ℹ️ Need Help? Contact: sairamanmathivelan@gmail.com
         </div>
         """,
         unsafe_allow_html=True
@@ -89,42 +77,15 @@ def set_background(full_bg_path, sidebar_bg_path):
 st.set_page_config(layout="wide", page_title="AutoML Deployment Agent", page_icon="🤖")
 
 set_background("background.jpg","sidebar.jpg")
-
 st.title("AutoML Deployment Agent by MSR")
 
-# --- Session State Initialization ---
 for key in ["df", "model_trained", "deploy_clicked", "target_col"]:
     if key not in st.session_state:
         st.session_state[key] = None if key == "df" else False
 
-# --- Sidebar Navigation ---
-st.sidebar.header("📌 ACTIONS")
+st.sidebar.header("📌 Navigation")
+page = st.sidebar.radio("Select Page", ["Upload Dataset", "Explore Dataset", "Run AutoML", "Training Status", "Retrain Model"])
 
-st.markdown("""
-    <style>
-    [data-testid="stSidebar"] button {
-        width: 100% !important;
-        min-width: 180px !important;
-        max-width: 100% !important;
-        margin-bottom: 10px;
-        font-weight: 600;
-        border-radius: 8px;
-        box-sizing: border-box;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-pages = ["Upload Dataset", "Explore Dataset", "Run ML Agent", "Training Status", "Retrain Model"]
-
-if "selected_page" not in st.session_state:
-    st.session_state.selected_page = pages[0]
-
-for p in pages:
-    if st.sidebar.button(p, key=f"nav_{p}"):
-        st.session_state.selected_page = p
-        
-page = st.session_state.selected_page
-# --- Dataset Upload ---
 if page == "Upload Dataset":
     uploaded_file = st.file_uploader("📂 Upload CSV Dataset", type="csv")
     if uploaded_file:
@@ -157,12 +118,9 @@ if page == "Upload Dataset":
                         st.dataframe(df_cleaned.head())
                 except Exception as e:
                     st.error(f"Error while applying cleaning code: {e}")
-                    
-                    
-# --- EDA Function ---
+
 def run_eda(df):
     st.header("🔎 Exploratory Data Analysis")
-
     st.subheader("📊 Dataset Preview")
     st.dataframe(df.head(50))
 
@@ -197,14 +155,13 @@ def run_eda(df):
     else:
         st.warning("Not enough numeric columns.")
 
-# --- Main Control Logic ---
 if st.session_state.df is not None:
     df = st.session_state.df
 
     if page == "Explore Dataset":
         run_eda(df)
 
-    elif page == "Run ML Agent":
+    elif page == "Run AutoML":
         st.subheader("🎯 Select Target Column")
         target = st.selectbox("Select Target Column", df.columns, index=df.columns.get_loc(st.session_state.target_col) if st.session_state.target_col in df.columns else 0)
         st.success(f"✅ Selected: {target}")
@@ -222,10 +179,10 @@ if st.session_state.df is not None:
             st.image("outputs/target_dist.png")
 
             st.markdown("### ⚙️ Training FLAML Model...")
-            
+
             import time
             start_time = time.time()
-            
+
             progress = st.progress(0)
             model, X = run_automl(df, target)
             progress.progress(100)
@@ -239,21 +196,18 @@ if st.session_state.df is not None:
 
             st.session_state.model_trained = True
             st.success("✅ Model training completed!")
-            
             end_time = time.time()
 
             st.markdown("### 🧾 Training Summary")
             st.write(f"Model Type: `{model.estimator}`")
             st.write(f"Training Duration: `{end_time - start_time:.2f}` seconds")
-            
+
             st.markdown("### 📈 SHAP Feature Importance")
             try:
                 generate_shap(model, X)
                 st.image("outputs/shap_plot.png", caption="SHAP Feature Importance")
             except Exception as e:
                 st.error(f"⚠️ Failed to generate SHAP plot: {e}")
-                
-           
 
         if st.session_state.model_trained:
             st.markdown("### 🚀 Deploy Model")
@@ -296,28 +250,4 @@ if st.session_state.df is not None:
             if st.button("🔁 Retrain Now"):
                 with open("trained_model.pkl", "rb") as f:
                     model = pickle.load(f)
-                st.success("✅ Model reloaded (retraining logic can be expanded)")
-
-            st.markdown("### 🚀 Deploy Model")
-            if st.button("🔌 Deploy Model"):
-                if not st.session_state.deploy_clicked:
-                    st.session_state.deploy_clicked = True
-                    try:
-                        subprocess.Popen(["streamlit", "run", "predictor_ui.py"], stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-                        st.toast("✅ Predictor UI launched!", icon="🚀")
-                    except Exception as e:
-                        st.error(f"❌ Launch failed: {e}")
-                else:
-                    st.info("ℹ️ Prediction UI is already running.")
-        else:
-            st.warning("⚠️ No model found to retrain.")
-
-# --- Download Model ---
-if os.path.exists("trained_model.pkl"):
-    with open("trained_model.pkl", "rb") as f:
-        st.download_button(
-            label="⬇️ Download Trained Model",
-            data=f,
-            file_name="trained_model.pkl",
-            mime="application/octet-stream",
-        )
+                st.warning("🔄 Retraining logic placeholder: Implement as needed.")

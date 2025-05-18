@@ -11,9 +11,25 @@ def run_automl(df: pd.DataFrame, target_col: str):
     X = df.drop(columns=[target_col])
     y = df[target_col]
 
+    # Convert object columns to category
+    for col in X.select_dtypes(include=["object"]).columns:
+        X[col] = X[col].astype("category")
+
     automl = AutoML()
     task_type = "classification" if y.nunique() <= 20 else "regression"
     metric = "accuracy" if task_type == "classification" else "r2"
+    
+    
+    if task_type == "classification" and not pd.api.types.is_numeric_dtype(y):
+        label_encoder = LabelEncoder()
+        y_encoded = label_encoder.fit_transform(y)
+        joblib.dump(label_encoder, "label_encoder.pkl")  # Save encoder
+    else:
+        y_encoded = y
+        label_encoder = None
+        
+        
+    automl = AutoML()
 
     automl_settings = {
         "time_budget": 60,  # seconds
@@ -22,12 +38,29 @@ def run_automl(df: pd.DataFrame, target_col: str):
         "log_file_name": "automl.log",
     }
 
-    automl.fit(X_train=X, y_train=y, **automl_settings)
-    
-    #os.makedirs("outputs", exist_ok=True)  # Ensure outputs directory exists
+    automl.fit(X_train=X, y_train=y_encoded, **automl_settings)
+
     joblib.dump(automl.model, "trained_model.pkl")  # Save the model
-    
+    joblib.dump(X.dtypes.to_dict(), "trained_dtypes.pkl")  # Save dtypes for consistent prediction
+
     return automl.model, X
+
+
+def predict(model, df: pd.DataFrame):
+    """Predict with the trained model, ensuring column types match training."""
+    dtype_map = joblib.load("trained_dtypes.pkl")
+    for col, dtype in dtype_map.items():
+        if col in df.columns:
+            df[col] = df[col].astype(dtype)
+    preds = model.predict(df)
+    
+    
+    # Decode labels if classification
+    if os.path.exists("label_encoder.pkl"):
+        label_encoder = joblib.load("label_encoder.pkl")
+        preds = label_encoder.inverse_transform(preds)
+
+    return preds
 
 
 def detect_uninformative_columns(df: pd.DataFrame):
@@ -41,34 +74,46 @@ def detect_uninformative_columns(df: pd.DataFrame):
     return drop_cols
 
 
+import shap
+import matplotlib.pyplot as plt
+import os
+import pandas as pd
+
+from sklearn.preprocessing import LabelEncoder
+
 def generate_shap(model, X):
     print("🧪 SHAP Debug: Model type =", type(model))
     print("🧪 SHAP Debug: X shape =", X.shape)
     print("🧪 SHAP Debug: Columns =", list(X.columns))
 
-    # Detect and drop uninformative columns
-    ignore_cols = detect_uninformative_columns(X)
-    if ignore_cols:
-        print("⚠️ Dropped likely ID/uninformative columns for SHAP:", set(ignore_cols))
-        X = X.drop(columns=ignore_cols)
+    # Extract raw model from FLAML
+    native_model = getattr(model, "model", model)
 
-    # Drop non-numeric columns
-    non_numeric_cols = X.select_dtypes(include=["object", "category"]).columns.tolist()
-    if non_numeric_cols:
-        print("⚠️ Dropped non-numeric columns for SHAP:", set(non_numeric_cols))
-        X = X.drop(columns=non_numeric_cols)
+    # Try to align X with model input features
+    try:
+        model_features = model.feature_names_in_
+        X = X[model_features].copy()
+    except AttributeError:
+        model_features = list(X.columns)
+
+    # Convert object and category types
+    for col in X.columns:
+        if X[col].dtype == "object" or pd.api.types.is_categorical_dtype(X[col]):
+            le = LabelEncoder()
+            X[col] = le.fit_transform(X[col].astype(str))
+        elif pd.api.types.is_integer_dtype(X[col]) or pd.api.types.is_float_dtype(X[col]):
+            X[col] = pd.to_numeric(X[col], errors='coerce')
+        else:
+            X[col] = X[col].astype(str).astype("category").cat.codes
+
+    X = X.fillna(0)
 
     try:
-        # Get native model from FLAML's XGBoostSklearnEstimator or other wrapper
-        if hasattr(model, "model"):
-            native_model = model.model
-        else:
-            native_model = model
+        # Use TreeExplainer for LGBM models
+        explainer = shap.TreeExplainer(native_model)
+        shap_values = explainer.shap_values(X)
 
-        explainer = shap.Explainer(native_model.predict, X)
-        shap_values = explainer(X)
-
-        os.makedirs("outputs", exist_ok=True)  # Ensure outputs directory exists
+        os.makedirs("outputs", exist_ok=True)
         shap.summary_plot(shap_values, X, show=False)
         plt.tight_layout()
         plt.savefig("outputs/shap_plot.png")
@@ -76,20 +121,8 @@ def generate_shap(model, X):
         print("✅ SHAP plot saved to outputs/shap_plot.png")
 
     except Exception as e:
-        print("[SHAP Fallback] TreeExplainer failed:", e)
-
-        try:
-            explainer = shap.KernelExplainer(native_model.predict, shap.sample(X, 100))
-            shap_values = explainer.shap_values(X.iloc[:100])
-            shap.summary_plot(shap_values, X.iloc[:100], show=False)
-            plt.tight_layout()
-            plt.savefig("outputs/shap_plot.png")
-            plt.close()
-            print("✅ SHAP plot saved with KernelExplainer fallback.")
-        except Exception as e2:
-            print("❌ SHAP generation error: SHAP failed for both Explainers.")
-            print("Details:", e2)
-            raise RuntimeError("SHAP failed for both Explainers.")
+        print("❌ SHAP generation error:", e)
+        raise RuntimeError("SHAP failed: " + str(e))
 
 
 def plot_target_distribution(df: pd.DataFrame, target_col: str):
