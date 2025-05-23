@@ -1,1 +1,2 @@
-outputs/trained_model.pkl
+.env
+_pycache
